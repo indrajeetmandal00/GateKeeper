@@ -3,6 +3,8 @@ import crypto from "crypto";    //cryto is present in nodejs alt of bycrypt
 import jwt from "jsonwebtoken";
 import config from "../config/config.js";
 import Session from "../models/session.model.js";
+import { sendEmail } from "../services/email.server.js";
+import Otp from "../models/otp.model.js";
 
 async function register(req, res) {
     const { name, email, password } = req.body;
@@ -26,6 +28,19 @@ async function register(req, res) {
             email,
             password: hashPassword
         });
+        // send verification email
+        const otp=generateOtp();
+        const html=getOtpHTML(otp);
+
+        const otpHash=crypto.createHash("sha256").update(otp).digest("hex"); //hashing the simple otp
+        await Otp.create({
+            email: email,
+            user: user._id,
+            otpHash
+        });
+        await sendEmail(email, "Verify your email", "",html);
+
+
         //after user created token is given to him
         const refreshToken = jwt.sign({ id: user._id }, config.JWT_KEY, //saved in the cookie, helps to create access token via server, usless on its own
             {
@@ -86,6 +101,9 @@ async function login(req, res) {
 
         if (!user) {
             return res.status(400).json({ message: "Invalid credentials" });
+        }
+        if (!user.isVerified) {
+            return res.status(400).json({ message: "Please verify your email" });
         }
 
         const hashPassword = crypto.createHash("sha256").update(password).digest("hex");
@@ -225,6 +243,26 @@ async function logoutAll(req, res) {
 
     }
     catch (error) {
+        console.log(error);
+        res.status(500).json({ message: "Something went wrong" });
+    }
+}
+
+async function verifyEmail(req, res) {
+    try {
+        const { otp,email } = req.body;
+        const otpHash = crypto.createHash("sha256").update(otp).digest("hex");
+        const otpData = await Otp.findOne({ email, otpHash }); //finding the otp and email in the database
+        if (!otpData) {
+            return res.status(400).json({ message: "Invalid OTP" });
+        }
+        const user = await User.findOneByIdAndUpdate({user:otpData.user, isVerified: true}); //otpData.user is the id of the user
+        await Otp.deleteMany({user:otpData.user}); //deleting the otp once it is verified
+         
+
+        res.status(200).json({ message: "Email verified successfully" ,user});
+
+    } catch (error) {
         console.log(error);
         res.status(500).json({ message: "Something went wrong" });
     }
